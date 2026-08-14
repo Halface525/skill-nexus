@@ -1,0 +1,71 @@
+# ════════════════════════════════════════════════════
+# SkillNexus 自动发布工作流
+# 触发方式:推送 v* 开头的 tag(如 git tag v0.2.0 && git push --tags)
+# 效果:三平台自动构建 → 自动创建/更新 GitHub Release 并上传安装包
+# ════════════════════════════════════════════════════
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  # 先建 Release 占位,拿到 release id,避免多平台竞态
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release
+        id: create-release
+        uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: ${{ github.ref_name }}
+
+  # 三平台并行构建,并把安装包上传到同一个 Release
+  build:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - platform: windows-latest
+            args: --target x86_64-pc-windows-msvc
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-latest
+            args: --target x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build and upload release asset
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
