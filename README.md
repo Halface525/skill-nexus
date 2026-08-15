@@ -53,10 +53,10 @@
 
 | 类型 | 说明 | 代表 Agent |
 |------|------|-----------|
-| **direct(直接读取)** | Agent 原生支持读取 `~/.agents/skills`,无需链接 | DeepSeek Harness、Codex、Cursor、Trae、GitHub Copilot |
+| **direct(直接读取)** | 原生读取 `~/.agents/skills`,**同时也有自己独立的技能目录**(如 Codex → `~/.codex/skills`、dsh → `~/.dsh/skills`) | DeepSeek Harness、Codex、Cursor、Trae、GitHub Copilot |
 | **junction(链接)** | Agent 有固定的技能目录,通过 **junction**(Windows)/ **symlink**(macOS/Linux)指向统一库 | Claude、Cline、Gemini CLI、Qwen Code、Kiro |
 
-> **库位置决定控制粒度**:统一库默认在 `~/.agents/skills`(多数 Agent 原生读取的位置)。首次运行可把它迁移到任意位置(如程序目录);一旦库不在约定路径,所有 Agent 都改由链接访问,即可逐个精细控制(含原本「直接读取」的 Agent)。
+> **库位置决定控制粒度**:统一库默认在 `~/.agents/skills`。首次运行可把它迁移到任意位置;一旦库不在约定路径,**每个 Agent(含 direct)的技能链接都会建进它自己的目录**(如 `~/.codex/skills`、`~/.dsh/skills`),从而全部可逐个精细控制。只有「没有独立目录的自定义 direct」才退回共享的 `~/.agents/skills`(整组控制)。
 
 ```
                 ┌─────────────────────┐
@@ -155,7 +155,7 @@ npm run tauri build
 |------|------|
 | `name` | 显示名称 |
 | `kind` | `direct` 直接读取统一库 / `junction` 建链接同步 |
-| `dir` | junction 类必填:技能目录(相对 home),如 `.claude/skills` |
+| `dir` | 技能目录(相对 home,支持 `appdata/` 前缀解析到 `%APPDATA%`)。junction 类与「有独立目录的 direct」都填,如 `.claude/skills`、`.codex/skills`、`appdata/devin/skills` |
 | `binary` | 检测用:可执行文件名(可选)。命令在 PATH 上是「已安装」的强证据 |
 | `homeDir` | 检测用:home 下的配置目录(可选)。目录里有真实数据(不只有同步时创建的 `skills` 子目录)才视为已安装,可避免残留目录误判(如 `~/.gemini` 残留) |
 | `appdata` | 检测用:`%APPDATA%` 下存在这些应用目录即视为已安装,如 `["Trae CN"]`(可选) |
@@ -193,11 +193,26 @@ npm run tauri build
 
 ## 🤖 内置 Agent(24 个)
 
-| 直接读取(direct) | 需链接(junction) |
+| 直接读取(direct,各带独立目录) | 需链接(junction) |
 |------------------|------------------|
 | DeepSeek Harness · Codex · Cursor · Antigravity · Aider · Windsurf · Trae · GitHub Copilot · Devin · Amp | Claude · Cline · Roo Code · Gemini · OpenCode · Goose · Kiro · WorkBuddy · Qwen Code · Kilo Code · OpenHands · iFlow · Kimi · Grok |
 
-> 通过编辑 `agents.json` 可添加任意其他 Agent。
+direct 类的独立技能目录:
+
+| Agent | 独立技能目录 |
+|-------|-------------|
+| DeepSeek Harness | `~/.dsh/skills` |
+| Codex | `~/.codex/skills` |
+| Cursor | `~/.cursor/skills` |
+| Antigravity | `~/.gemini/antigravity/skills` |
+| Aider | `~/.aider/skills`(默认不自动扫描,需在 `.aider.conf.yml` 配置) |
+| Windsurf | `~/.codeium/windsurf/skills` |
+| Trae | `~/.trae-cn/skills`(国际版为 `~/.trae/skills`) |
+| GitHub Copilot | `~/.copilot/skills` |
+| Devin | `%APPDATA%\devin\skills` |
+| Amp | `~/.config/amp/skills` |
+
+> 通过编辑 `agents.json` 可添加任意其他 Agent;给 direct 配了 `dir` 后即可单独控制。
 
 ## 📁 项目结构
 

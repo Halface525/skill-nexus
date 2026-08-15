@@ -26,6 +26,7 @@ interface AgentStatus {
   kind: string;
   ok: boolean;
   excluded: boolean;
+  controllable: boolean;
 }
 
 interface Skill {
@@ -47,6 +48,7 @@ interface AgentScan {
   installed: boolean;
   enabled: boolean;
   kind: string;
+  controllable: boolean;
   root: string;
   skillCount: number;
   syncedCount: number;
@@ -553,7 +555,7 @@ function App() {
                         label
                         lang={lang}
                       />
-                      {a.kind === "junction" ? (
+                      {a.controllable ? (
                         <Switch
                           checked={!a.excluded}
                           onChange={() => handleToggleSkillAgent(selected, a)}
@@ -627,7 +629,7 @@ function App() {
                       <AgentBadge
                         name={a.name}
                         ok={
-                          a.kind === "direct"
+                          !a.controllable
                             ? true
                             : a.enabled &&
                               a.syncedCount >= scan.unifiedCount
@@ -640,7 +642,7 @@ function App() {
                       )}
                     </span>
                     <div className="pill-wrap">
-                      {a.kind === "junction" ? (
+                      {a.controllable ? (
                         <>
                           <Switch
                             checked={a.enabled}

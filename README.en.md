@@ -53,10 +53,10 @@ All agents' skills converge into one **unified library**, connected in two ways:
 
 | Type | How it works | Example agents |
 |------|--------------|----------------|
-| **direct** | Agent natively reads `~/.agents/skills`, no link needed | DeepSeek Harness, Codex, Cursor, Trae, GitHub Copilot |
+| **direct** | Natively reads `~/.agents/skills`, and **also has its own dedicated skill directory** (e.g. Codex → `~/.codex/skills`, dsh → `~/.dsh/skills`) | DeepSeek Harness, Codex, Cursor, Trae, GitHub Copilot |
 | **junction** | Agent has a fixed skill directory, linked to the library via **junction** (Windows) / **symlink** (macOS/Linux) | Claude, Cline, Gemini CLI, Qwen Code, Kiro |
 
-> **Library location controls the granularity**: the library defaults to `~/.agents/skills` (where most agents read natively). On first run you can migrate it anywhere (e.g. the program folder); once it is outside the convention path, every agent — including former "direct" ones — goes through links and can be controlled individually.
+> **Library location controls the granularity**: the library defaults to `~/.agents/skills`. On first run you can migrate it anywhere; once it is outside the convention path, **every agent (including "direct" ones) gets its skill links created in its own directory** (e.g. `~/.codex/skills`, `~/.dsh/skills`), so all of them can be controlled individually. Only a custom "direct" agent without its own directory falls back to the shared `~/.agents/skills` (group control).
 
 ```
                 ┌─────────────────────┐
@@ -155,7 +155,7 @@ Generated on first run; edit it to add or remove any agent without touching code
 |-------|-------------|
 | `name` | Display name |
 | `kind` | `direct` reads the unified library / `junction` creates a link |
-| `dir` | Required for junction: skill directory (relative to home), e.g. `.claude/skills` |
+| `dir` | Skill directory (relative to home; `appdata/` prefix resolves to `%APPDATA%`). Required for junction and "direct with own directory" agents, e.g. `.claude/skills`, `.codex/skills`, `appdata/devin/skills` |
 | `binary` | Detection: executable name (optional). The command being on PATH is strong evidence the agent is installed |
 | `homeDir` | Detection: config directory under home (optional). Counted as installed only if it contains real data beyond the `skills` subdirectory created by syncing — this avoids false positives from leftover directories (e.g. a leftover `~/.gemini`) |
 | `appdata` | Detection: considered installed if these application directories exist under `%APPDATA%`, e.g. `["Trae CN"]` (optional) |
@@ -193,11 +193,26 @@ A skill is linked to every enabled agent by default; agents in the exclusion lis
 
 ## 🤖 Built-in Agents (24)
 
-| Direct read | Junction (link) |
+| Direct read (each with its own directory) | Junction (link) |
 |-------------|-----------------|
 | DeepSeek Harness · Codex · Cursor · Antigravity · Aider · Windsurf · Trae · GitHub Copilot · Devin · Amp | Claude · Cline · Roo Code · Gemini · OpenCode · Goose · Kiro · WorkBuddy · Qwen Code · Kilo Code · OpenHands · iFlow · Kimi · Grok |
 
-> Any other agent can be added by editing `agents.json`.
+The dedicated skill directories of the direct agents:
+
+| Agent | Own skill directory |
+|-------|---------------------|
+| DeepSeek Harness | `~/.dsh/skills` |
+| Codex | `~/.codex/skills` |
+| Cursor | `~/.cursor/skills` |
+| Antigravity | `~/.gemini/antigravity/skills` |
+| Aider | `~/.aider/skills` (no auto-scan by default; configure in `.aider.conf.yml`) |
+| Windsurf | `~/.codeium/windsurf/skills` |
+| Trae | `~/.trae-cn/skills` (international: `~/.trae/skills`) |
+| GitHub Copilot | `~/.copilot/skills` |
+| Devin | `%APPDATA%\devin\skills` |
+| Amp | `~/.config/amp/skills` |
+
+> Any other agent can be added by editing `agents.json`; a "direct" agent with a `dir` gets individual control.
 
 ## 📁 Project Structure
 
