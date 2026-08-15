@@ -16,6 +16,11 @@ fn install_skill(src: String, lang: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn uninstall_skill(name: String, lang: String) -> Result<(), String> {
+    core::uninstall_skill(&name, &lang)
+}
+
+#[tauri::command]
 fn sync_all() -> Result<core::SyncResult, String> {
     core::sync_all()
 }
@@ -23,6 +28,21 @@ fn sync_all() -> Result<core::SyncResult, String> {
 #[tauri::command]
 fn scan_info() -> core::ScanInfo {
     core::scan_info()
+}
+
+#[tauri::command]
+fn set_agent_enabled(name: String, enabled: bool, lang: String) -> Result<(), String> {
+    core::set_agent_enabled(&name, enabled, &lang)
+}
+
+#[tauri::command]
+fn set_skill_agent(skill: String, agent: String, enabled: bool, lang: String) -> Result<(), String> {
+    core::set_skill_agent(&skill, &agent, enabled, &lang)
+}
+
+#[tauri::command]
+fn add_agent(agent: core::NewAgent, lang: String) -> Result<String, String> {
+    core::add_agent(agent, &lang)
 }
 
 #[tauri::command]
@@ -49,8 +69,12 @@ pub fn run() {
             load_skills,
             read_skill_md,
             install_skill,
+            uninstall_skill,
             sync_all,
             scan_info,
+            set_agent_enabled,
+            set_skill_agent,
+            add_agent,
             get_settings,
             set_unified_library,
             open_dir

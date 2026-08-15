@@ -24,7 +24,7 @@
 
 | 文件 | 链接 |
 |------|------|
-| 📦 Windows 安装程序 | [SkillNexus_0.1.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.1.0_x64-setup.exe) |
+| 📦 Windows 安装程序 | [SkillNexus_0.2.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.2.0_x64-setup.exe) |
 | 🟢 Windows 免安装版 | [SkillNexus.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus.exe) |
 
 其他平台或更多版本:前往 [Releases](https://github.com/Halface525/skill-nexus/releases/latest)。
@@ -36,16 +36,16 @@
 ## ✨ 功能特性
 
 - **统一技能库** —— 所有技能集中存放于一个目录,一处管理,多处生效
-- **一键同步** —— 为所有已安装的「junction 类」Agent 自动创建链接,技能即装即用
-- **直接读取支持** —— Codex、Cursor、DeepSeek Harness、Trae 等原生读取 `~/.agents/skills`,零配置
-- **扫描检测** —— 检测本机安装了哪些 Agent,以及各技能目录的同步状态
-- **安装技能** —— 选择任意含 `SKILL.md` 的文件夹,自动复制进统一库并建链接
-- **SKILL.md 渲染** —— 详情面板内完整渲染 Markdown(标题 / 代码块 / 表格 / 引用)
-- **品牌徽章** —— 每个 Agent 以官方 logo / 品牌色徽章显示,角落状态点标识接入状态
-- **亮 / 暗 / 跟随系统** 三种主题
-- **简体中文 / English** 双语界面
-- **统一库位置可配置** —— 默认 `~/.agents/skills`,可自由更换
-- **可扩展 Agent 列表** —— 通过配置文件随时增删 Agent,无需改代码
+- **一键同步** —— 为所有已安装的 Agent 自动创建链接,技能即装即用
+- **智能检测** —— 命令在 PATH 上、或配置目录有真实数据才算已装(排除残留目录误判)
+- **两级开关** —— 全局(某 Agent 是否使用任何技能)+ 每技能(某技能是否给某 Agent)
+- **安装 / 卸载技能** —— 选择含 `SKILL.md` 的文件夹安装;一键卸载并移除所有链接
+- **添加自定义 Agent** —— 内置 24 个主流 Agent;不在列表里的可手动添加,支持「手动标记已安装」
+- **统一库可迁移** —— 首次运行引导选择库位置;库不在系统默认路径时,所有 Agent 均可逐个控制
+- **SKILL.md 渲染** —— 详情面板完整渲染 Markdown(标题 / 代码块 / 表格 / 引用)
+- **品牌徽章** —— 每个 Agent 以官方 logo / 品牌色徽章显示
+- **关于面板** —— 版本信息 + 检查更新(对接 GitHub Release)
+- **亮 / 暗 / 跟随系统** 主题 + **简体中文 / English** 双语界面
 
 ## 🗂️ 架构
 
@@ -55,6 +55,8 @@
 |------|------|-----------|
 | **direct(直接读取)** | Agent 原生支持读取 `~/.agents/skills`,无需链接 | DeepSeek Harness、Codex、Cursor、Trae、GitHub Copilot |
 | **junction(链接)** | Agent 有固定的技能目录,通过 **junction**(Windows)/ **symlink**(macOS/Linux)指向统一库 | Claude、Cline、Gemini CLI、Qwen Code、Kiro |
+
+> **库位置决定控制粒度**:统一库默认在 `~/.agents/skills`(多数 Agent 原生读取的位置)。首次运行可把它迁移到任意位置(如程序目录);一旦库不在约定路径,所有 Agent 都改由链接访问,即可逐个精细控制(含原本「直接读取」的 Agent)。
 
 ```
                 ┌─────────────────────┐
@@ -154,19 +156,40 @@ npm run tauri build
 | `name` | 显示名称 |
 | `kind` | `direct` 直接读取统一库 / `junction` 建链接同步 |
 | `dir` | junction 类必填:技能目录(相对 home),如 `.claude/skills` |
-| `binary` | 检测用:可执行文件名(可选) |
-| `homeDir` | 检测用:home 下存在该目录即视为已安装(可选) |
-| `appdata` | 检测用:`%APPDATA%` 下存在这些目录即视为已安装,如 `["Trae CN"]`(可选) |
+| `binary` | 检测用:可执行文件名(可选)。命令在 PATH 上是「已安装」的强证据 |
+| `homeDir` | 检测用:home 下的配置目录(可选)。目录里有真实数据(不只有同步时创建的 `skills` 子目录)才视为已安装,可避免残留目录误判(如 `~/.gemini` 残留) |
+| `appdata` | 检测用:`%APPDATA%` 下存在这些应用目录即视为已安装,如 `["Trae CN"]`(可选) |
+| `enabled` | 使用开关(可选,默认 `true`)。`false` = 停止同步该 Agent 并移除其链接 |
+| `manual` | 手动标记已安装(可选,默认 `false`)。`true` = 跳过检测,直接视为已装(自定义 Agent 用) |
+
+> 应用内「扫描」面板可添加/停用自定义 Agent,无需手改此文件。
+
+### 每技能排除 `~/.agents/skill_agents.json`
+
+控制某个技能是否给某个 Agent(应用内「技能详情」面板操作):
+
+```json
+{
+  "excluded": {
+    "nature-writing": ["WorkBuddy"]
+  }
+}
+```
+
+语义:技能默认同步给所有已启用的 Agent;出现在排除列表里的不建链接。开启/关闭立即生效。
 
 ### 统一库位置 `~/.agents/settings.json`
 
 ```json
 {
-  "unifiedLibrary": "D:/MySkills"
+  "unifiedLibrary": "D:/MySkills",
+  "librarySetup": true
 }
 ```
 
-默认位置为 `~/.agents/skills`,也可以在应用内「设置 → 统一库位置」随时更改或恢复默认。
+- 首次运行会引导选择库位置(可迁移现有技能,源目录保留为 `.bak`)
+- 库在系统默认的 `~/.agents/skills` 时,「直接读取」类 Agent 无法逐个控制;迁移到其他位置后即可全部精细控制
+- 应用内「设置 → 统一库位置」随时更改(迁移式,自动同步)
 
 ## 🤖 内置 Agent(24 个)
 

@@ -24,7 +24,7 @@ A cross-platform desktop tool that manages the skill libraries of AI coding agen
 
 | File | Link |
 |------|------|
-| 📦 Windows installer | [SkillNexus_0.1.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.1.0_x64-setup.exe) |
+| 📦 Windows installer | [SkillNexus_0.2.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.2.0_x64-setup.exe) |
 | 🟢 Windows portable | [SkillNexus.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus.exe) |
 
 Other platforms or older versions: see [Releases](https://github.com/Halface525/skill-nexus/releases/latest).
@@ -36,16 +36,16 @@ Other platforms or older versions: see [Releases](https://github.com/Halface525/
 ## ✨ Features
 
 - **Unified skill library** — all skills live in one directory; manage once, apply everywhere
-- **One-click sync** — automatically creates links for every installed "junction" agent, so skills are ready instantly
-- **Native direct-read support** — Codex, Cursor, DeepSeek Harness, Trae and others read `~/.agents/skills` natively
-- **Agent detection** — scans which agents are installed on your machine and reports each skill directory's sync status
-- **Install skills** — pick any folder containing a `SKILL.md`; it is copied into the library and linked automatically
+- **One-click sync** — automatically creates links for every installed agent, so skills are ready instantly
+- **Smart detection** — only counts an agent as installed when its command is on PATH or its config dir has real data (no leftover-directory false positives)
+- **Two-level toggles** — global (does this agent use any skills?) + per-skill (does this skill go to this agent?)
+- **Install / uninstall skills** — pick any folder containing a `SKILL.md` to install; uninstall removes it and all links in one click
+- **Add custom agents** — 24 mainstream agents built in; anything else can be added manually, with an optional "always treat as installed" flag
+- **Migratable library** — first-run wizard picks the location; once the library is outside the system default path, every agent can be controlled individually
 - **SKILL.md rendering** — full Markdown rendering (headings / code blocks / tables / quotes) in the detail panel
-- **Brand badges** — each agent shown as an official logo / brand-color badge with a corner status dot
-- **Light / Dark / System** themes
-- **Simplified Chinese / English** UI
-- **Configurable library location** — defaults to `~/.agents/skills`, changeable anytime
-- **Extensible agent list** — add or remove agents via a config file, no code changes
+- **Brand badges** — each agent shown as an official logo / brand-color badge
+- **About panel** — version info + update check against GitHub Releases
+- **Light / Dark / System** themes + **Simplified Chinese / English** UI
 
 ## 🗂️ Architecture
 
@@ -55,6 +55,8 @@ All agents' skills converge into one **unified library**, connected in two ways:
 |------|--------------|----------------|
 | **direct** | Agent natively reads `~/.agents/skills`, no link needed | DeepSeek Harness, Codex, Cursor, Trae, GitHub Copilot |
 | **junction** | Agent has a fixed skill directory, linked to the library via **junction** (Windows) / **symlink** (macOS/Linux) | Claude, Cline, Gemini CLI, Qwen Code, Kiro |
+
+> **Library location controls the granularity**: the library defaults to `~/.agents/skills` (where most agents read natively). On first run you can migrate it anywhere (e.g. the program folder); once it is outside the convention path, every agent — including former "direct" ones — goes through links and can be controlled individually.
 
 ```
                 ┌─────────────────────┐
@@ -154,19 +156,40 @@ Generated on first run; edit it to add or remove any agent without touching code
 | `name` | Display name |
 | `kind` | `direct` reads the unified library / `junction` creates a link |
 | `dir` | Required for junction: skill directory (relative to home), e.g. `.claude/skills` |
-| `binary` | Detection: executable name (optional) |
-| `homeDir` | Detection: considered installed if this directory exists under home (optional) |
-| `appdata` | Detection: considered installed if these directories exist under `%APPDATA%`, e.g. `["Trae CN"]` (optional) |
+| `binary` | Detection: executable name (optional). The command being on PATH is strong evidence the agent is installed |
+| `homeDir` | Detection: config directory under home (optional). Counted as installed only if it contains real data beyond the `skills` subdirectory created by syncing — this avoids false positives from leftover directories (e.g. a leftover `~/.gemini`) |
+| `appdata` | Detection: considered installed if these application directories exist under `%APPDATA%`, e.g. `["Trae CN"]` (optional) |
+| `enabled` | Use toggle (optional, default `true`). `false` stops syncing that agent and removes its links |
+| `manual` | Always treat as installed (optional, default `false`). `true` skips detection — for custom agents |
+
+> You can add or disable agents from the app's **Scan** panel; no need to edit this file by hand.
+
+### Per-skill exclusions — `~/.agents/skill_agents.json`
+
+Controls whether a specific skill is linked to a specific agent (managed from the skill's detail panel):
+
+```json
+{
+  "excluded": {
+    "nature-writing": ["WorkBuddy"]
+  }
+}
+```
+
+A skill is linked to every enabled agent by default; agents in the exclusion list get no link. Toggling takes effect immediately.
 
 ### Library location — `~/.agents/settings.json`
 
 ```json
 {
-  "unifiedLibrary": "D:/MySkills"
+  "unifiedLibrary": "D:/MySkills",
+  "librarySetup": true
 }
 ```
 
-The default location is `~/.agents/skills`. You can also change or reset it anytime from the app: **Settings → Unified Library Location**.
+- A first-run wizard guides the location choice and can migrate existing skills (the source folder is kept as `.bak`)
+- When the library is at the system default `~/.agents/skills`, "direct-read" agents cannot be controlled individually; migrating elsewhere enables fine-grained control over all of them
+- Change it anytime from **Settings → Unified Library Location** (migrates and auto-syncs)
 
 ## 🤖 Built-in Agents (24)
 

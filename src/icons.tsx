@@ -118,6 +118,27 @@ export function IconX({ size = 16 }: IconProps) {
   );
 }
 
+export function IconTrash({ size = 16 }: IconProps) {
+  return (
+    <Svg size={size}>
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M10 11v6M14 11v6" />
+    </Svg>
+  );
+}
+
+export function IconAlert({ size = 16 }: IconProps) {
+  return (
+    <Svg size={size}>
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </Svg>
+  );
+}
+
 export function IconSettings({ size = 16 }: IconProps) {
   return (
     <Svg size={size}>

@@ -155,6 +155,35 @@ body {
 .btn.icon {
   padding: 8px 10px;
 }
+.btn.ghost-danger {
+  background: transparent;
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn.ghost-danger:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.btn.ghost:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn.danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.btn.danger:hover {
+  background: var(--red);
+  border-color: var(--red);
+  opacity: 0.9;
+}
 
 /* ── 搜索 ─────────────────────────────── */
 .searchbar {
@@ -357,6 +386,7 @@ body {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  overflow-y: auto; /* 整个详情区一起滚动,md 不再单独带滚动条 */
 }
 .detail-header {
   display: flex;
@@ -366,15 +396,33 @@ body {
 .detail-header h2 {
   font-size: 20px;
 }
+.detail-actions {
+  display: flex;
+  gap: 8px;
+}
 .detail-desc {
   color: var(--text-dim);
   font-size: 13.5px;
 }
 .detail-agents {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.skill-agent-row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.skill-agent-note {
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 .md-title {
@@ -386,9 +434,6 @@ body {
 
 /* ── markdown 渲染区 ──────────────────── */
 .markdown {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -580,6 +625,9 @@ body {
   font-size: 12px;
   color: var(--text-faint);
   margin-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 .scan-card {
   background: var(--card);
@@ -636,18 +684,206 @@ body {
 .pill.warn {
   color: var(--accent);
 }
-.scan-hint {
-  font-size: 11.5px;
-  color: var(--text-faint);
-  margin-top: 6px;
-  text-align: center;
-}
 
 /* ── 设置面板 ─────────────────────────── */
 .overlay-box.settings {
   width: 460px;
   height: auto;
   max-height: 80vh;
+}
+.overlay-box.confirm {
+  width: 360px;
+  height: auto;
+  padding: 26px 28px 22px;
+  text-align: center;
+}
+.confirm-icon {
+  color: var(--red);
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.confirm-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.confirm-text {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 22px;
+  white-space: pre-line;
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.confirm-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* ── 关于 ─────────────────────────────── */
+.about-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+}
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.about-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.about-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.about-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+.about-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.about-actions {
+  display: flex;
+  gap: 8px;
+}
+.about-update {
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.about-update.ok {
+  color: var(--green);
+}
+.about-update.warn {
+  color: var(--accent);
+}
+.about-update.err {
+  color: var(--red);
+}
+
+/* ── 添加 Agent 表单 ─────────────────────── */
+.overlay-box.form {
+  width: 420px;
+  height: auto;
+  max-height: 85vh;
+}
+.form-body {
+  padding: 18px 22px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.form-field label {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.form-field input {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+}
+.form-field input:focus {
+  border-color: var(--accent);
+}
+.form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.form-check input {
+  accent-color: var(--accent);
+}
+.form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* ── 首次运行:选择库位置 ─────────────────── */
+.overlay-box.setup {
+  width: 420px;
+  height: auto;
+  padding: 28px 30px 24px;
+  text-align: center;
+}
+.setup-icon {
+  color: var(--accent);
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.setup-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.setup-desc {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 16px;
+  white-space: pre-line;
+}
+.setup-path {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+}
+.setup-path-label {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  display: block;
+  margin-bottom: 4px;
+}
+.setup-path code {
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+.setup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .settings-body {
   flex: 1;
@@ -711,6 +947,38 @@ body {
   background: var(--card);
   color: var(--text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* ── 开关 switch ────────────────────────── */
+.switch {
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  padding: 0;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.switch .switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch.on .switch-knob {
+  transform: translateX(14px);
+  background: #fff;
 }
 
 /* ── 轻提示 toast(替代系统弹窗)───────── */

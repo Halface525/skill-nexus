@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AgentBadge } from "./AgentBadge";
@@ -8,14 +10,14 @@ import { makeT, getInitialLang, type Lang } from "./i18n";
 import {
   IconOrbit,
   IconSearch,
-  IconSun,
-  IconMoon,
   IconPlus,
   IconRefresh,
   IconScan,
   IconFolder,
   IconX,
   IconSettings,
+  IconTrash,
+  IconAlert,
 } from "./icons";
 import "./App.css";
 
@@ -23,6 +25,7 @@ interface AgentStatus {
   name: string;
   kind: string;
   ok: boolean;
+  excluded: boolean;
 }
 
 interface Skill {
@@ -42,6 +45,7 @@ interface SyncResult {
 interface AgentScan {
   name: string;
   installed: boolean;
+  enabled: boolean;
   kind: string;
   root: string;
   skillCount: number;
@@ -57,6 +61,8 @@ interface ScanInfo {
 interface SettingsView {
   unifiedLibrary: string;
   defaultLibrary: string;
+  librarySetup: boolean;
+  suggestedLibrary: string;
 }
 
 interface Toast {
@@ -65,6 +71,19 @@ interface Toast {
 }
 
 type ThemeSetting = "system" | "light" | "dark";
+
+type UpdateState = "idle" | "checking" | "latest" | "available" | "error";
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
 
 function getInitialTheme(): ThemeSetting {
   const saved = localStorage.getItem("theme");
@@ -80,6 +99,29 @@ function effectiveTheme(t: ThemeSetting): "light" | "dark" {
     : "dark";
 }
 
+function Switch({
+  checked,
+  onChange,
+  title,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className={`switch ${checked ? "on" : ""}`}
+      onClick={onChange}
+      title={title}
+    >
+      <span className="switch-knob" />
+    </button>
+  );
+}
+
 function App() {
   const [theme, setTheme] = useState<ThemeSetting>(getInitialTheme);
   const [lang, setLang] = useState<Lang>(getInitialLang);
@@ -92,6 +134,21 @@ function App() {
   const [libraryPath, setLibraryPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [uninstallTarget, setUninstallTarget] = useState<Skill | null>(null);
+  const [appVersion, setAppVersion] = useState("");
+  const [updateState, setUpdateState] = useState<UpdateState>("idle");
+  const [latestVersion, setLatestVersion] = useState("");
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [suggestedLibrary, setSuggestedLibrary] = useState("");
+  const [agentFormOpen, setAgentFormOpen] = useState(false);
+  const [agentForm, setAgentForm] = useState({
+    name: "",
+    kind: "junction" as "direct" | "junction",
+    dir: "",
+    binary: "",
+    homeDir: "",
+    manual: false,
+  });
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<number | null>(null);
 
@@ -141,8 +198,14 @@ function App() {
 
   useEffect(() => {
     invoke<SettingsView>("get_settings")
-      .then((s) => setLibraryPath(s.unifiedLibrary))
+      .then((s) => {
+        setLibraryPath(s.unifiedLibrary);
+        setSuggestedLibrary(s.suggestedLibrary);
+        // 首次运行:引导选择统一库位置
+        if (!s.librarySetup) setSetupOpen(true);
+      })
       .catch(() => {});
+    getVersion().then(setAppVersion).catch(() => {});
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -201,6 +264,21 @@ function App() {
     }
   }
 
+  async function handleUninstall() {
+    if (!uninstallTarget) return;
+    const name = uninstallTarget.name;
+    try {
+      await invoke("uninstall_skill", { name, lang });
+      showToast("success", t("toast.uninstalled", { name }));
+      setUninstallTarget(null);
+      setSelected(null);
+      await refresh();
+    } catch (e) {
+      showToast("error", `${t("toast.uninstallFailed")}: ${e}`);
+      setUninstallTarget(null);
+    }
+  }
+
   async function openSettings() {
     try {
       const s = await invoke<SettingsView>("get_settings");
@@ -217,6 +295,7 @@ function App() {
     if (!dir) return;
     try {
       await invoke("set_unified_library", { path: dir });
+      await invoke<SyncResult>("sync_all"); // 迁移后立即同步链接
       showToast("success", t("settings.libraryChanged"));
       const s = await invoke<SettingsView>("get_settings");
       setSettings(s);
@@ -231,6 +310,7 @@ function App() {
     if (!settings) return;
     try {
       await invoke("set_unified_library", { path: settings.defaultLibrary });
+      await invoke<SyncResult>("sync_all");
       showToast("success", t("settings.libraryChanged"));
       const s = await invoke<SettingsView>("get_settings");
       setSettings(s);
@@ -238,6 +318,115 @@ function App() {
       await refresh();
     } catch (e) {
       showToast("error", `${t("settings.libraryFailed")}: ${e}`);
+    }
+  }
+
+  // 首次运行:把统一库迁移到指定位置(迁移 + 同步)
+  async function handleSetupLibrary(target: string) {
+    try {
+      await invoke("set_unified_library", { path: target });
+      await invoke<SyncResult>("sync_all");
+      const s = await invoke<SettingsView>("get_settings");
+      setLibraryPath(s.unifiedLibrary);
+      setSetupOpen(false);
+      await refresh();
+      showToast("success", t("setup.done"));
+    } catch (e) {
+      showToast("error", `${t("setup.failed")}: ${e}`);
+    }
+  }
+
+  async function handleSetupChooseOther() {
+    const dir = await open({ directory: true, title: t("setup.title") });
+    if (!dir) return;
+    await handleSetupLibrary(dir);
+  }
+
+  async function handleCheckUpdate() {
+    setUpdateState("checking");
+    try {
+      const res = await fetch(
+        "https://api.github.com/repos/Halface525/skill-nexus/releases/latest",
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { tag_name?: string };
+      const latest = String(data.tag_name ?? "").replace(/^v/i, "");
+      const cur = appVersion || "0";
+      setLatestVersion(latest);
+      setUpdateState(
+        latest && compareVersions(latest, cur) > 0 ? "available" : "latest",
+      );
+    } catch {
+      setUpdateState("error");
+    }
+  }
+
+  async function handleToggleAgent(a: AgentScan) {
+    const next = !a.enabled;
+    try {
+      await invoke("set_agent_enabled", { name: a.name, enabled: next, lang });
+      setScan(await invoke<ScanInfo>("scan_info"));
+      await refresh();
+      showToast(
+        "success",
+        next
+          ? t("toast.agentEnabled", { name: a.name })
+          : t("toast.agentDisabled", { name: a.name }),
+      );
+    } catch (e) {
+      showToast("error", `${e}`);
+    }
+  }
+
+  async function handleToggleSkillAgent(skill: Skill, a: AgentStatus) {
+    const wantEnabled = a.excluded; // 当前被排除 → 本次改为启用
+    try {
+      await invoke("set_skill_agent", {
+        skill: skill.name,
+        agent: a.name,
+        enabled: wantEnabled,
+        lang,
+      });
+      await refresh();
+      showToast(
+        "success",
+        wantEnabled
+          ? t("toast.skillAgentOn", { skill: skill.name, agent: a.name })
+          : t("toast.skillAgentOff", { skill: skill.name, agent: a.name }),
+      );
+    } catch (e) {
+      showToast("error", `${e}`);
+    }
+  }
+
+  async function handleAddAgent() {
+    try {
+      const name = await invoke<string>("add_agent", {
+        agent: {
+          name: agentForm.name,
+          kind: agentForm.kind,
+          dir: agentForm.dir.trim() || null,
+          binary: agentForm.binary.trim() || null,
+          homeDir: agentForm.homeDir.trim() || null,
+          appdata: [],
+          manual: agentForm.manual,
+        },
+        lang,
+      });
+      setAgentFormOpen(false);
+      setAgentForm({
+        name: "",
+        kind: "junction",
+        dir: "",
+        binary: "",
+        homeDir: "",
+        manual: false,
+      });
+      setScan(await invoke<ScanInfo>("scan_info"));
+      await refresh();
+      showToast("success", t("toast.agentAdded", { name }));
+    } catch (e) {
+      showToast("error", `${t("toast.agentAddFailed")}: ${e}`);
     }
   }
 
@@ -255,13 +444,6 @@ function App() {
           </div>
         </div>
         <div className="actions">
-          <button
-            className="btn icon"
-            onClick={() => setTheme(eff === "dark" ? "light" : "dark")}
-            title={eff === "dark" ? t("theme.toLight") : t("theme.toDark")}
-          >
-            {eff === "dark" ? <IconSun size={16} /> : <IconMoon size={16} />}
-          </button>
           <button
             className="btn icon"
             onClick={openSettings}
@@ -336,28 +518,54 @@ function App() {
             <>
               <div className="detail-header">
                 <h2>{selected.name}</h2>
-                <button
-                  className="btn sm"
-                  onClick={() => handleOpenDir(selected)}
-                >
-                  <IconFolder size={14} />
-                  {t("detail.openFolder")}
-                </button>
+                <div className="detail-actions">
+                  <button
+                    className="btn sm ghost-danger"
+                    onClick={() => setUninstallTarget(selected)}
+                    title={t("detail.uninstall")}
+                  >
+                    <IconTrash size={14} />
+                    {t("detail.uninstall")}
+                  </button>
+                  <button
+                    className="btn sm"
+                    onClick={() => handleOpenDir(selected)}
+                  >
+                    <IconFolder size={14} />
+                    {t("detail.openFolder")}
+                  </button>
+                </div>
               </div>
-              <p className="detail-desc">
+              <div className="detail-desc">
                 {selected.description || t("detail.noDesc")}
-              </p>
+              </div>
               <div className="detail-agents">
-                {selected.agents.map((a) => (
-                  <AgentBadge
-                    key={a.name}
-                    name={a.name}
-                    ok={a.ok}
-                    size="lg"
-                    label
-                    lang={lang}
-                  />
-                ))}
+                <div className="md-title">{t("detail.agents")}</div>
+                {selected.agents.length === 0 ? (
+                  <p className="md-empty">{t("detail.noAgents")}</p>
+                ) : (
+                  selected.agents.map((a) => (
+                    <div key={a.name} className="skill-agent-row">
+                      <AgentBadge
+                        name={a.name}
+                        ok={a.ok}
+                        size="lg"
+                        label
+                        lang={lang}
+                      />
+                      {a.kind === "junction" ? (
+                        <Switch
+                          checked={!a.excluded}
+                          onChange={() => handleToggleSkillAgent(selected, a)}
+                        />
+                      ) : (
+                        <span className="skill-agent-note">
+                          {t("agent.directRead")}
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
               <div className="md-title">{t("detail.skillMd")}</div>
               <div className="markdown">
@@ -404,44 +612,73 @@ function App() {
                 <div className="scan-path">{scan.unifiedRoot}</div>
               </div>
 
-              <div className="scan-subtitle">{t("scan.agents")}</div>
+              <div className="scan-subtitle">
+                <span>{t("scan.agents")}</span>
+                <button className="btn sm" onClick={() => setAgentFormOpen(true)}>
+                  <IconPlus size={13} />
+                  {t("agent.add")}
+                </button>
+              </div>
 
               {scan.agents.map((a) => (
                 <div key={a.name} className="scan-card">
                   <div className="scan-card-row">
                     <span className="scan-agent">
-                      <AgentBadge name={a.name} ok lang={lang} />
+                      <AgentBadge
+                        name={a.name}
+                        ok={
+                          a.kind === "direct"
+                            ? true
+                            : a.enabled &&
+                              a.syncedCount >= scan.unifiedCount
+                        }
+                        lang={lang}
+                      />
                       {a.name}
+                      {!a.enabled && (
+                        <span className="pill warn">{t("agent.disabled")}</span>
+                      )}
                     </span>
                     <div className="pill-wrap">
-                      <span className="pill neutral">
-                        {a.kind === "junction"
-                          ? t("scan.kind.link")
-                          : t("scan.kind.direct")}
-                      </span>
                       {a.kind === "junction" ? (
-                        <span
-                          className={`pill ${a.syncedCount >= scan.unifiedCount ? "ok" : "warn"}`}
-                        >
-                          {t("scan.synced", {
-                            n: a.syncedCount,
-                            total: scan.unifiedCount,
-                          })}
-                        </span>
+                        <>
+                          <Switch
+                            checked={a.enabled}
+                            onChange={() => handleToggleAgent(a)}
+                          />
+                          <span className="pill neutral">
+                            {t("scan.kind.link")}
+                          </span>
+                          {a.enabled && (
+                            <span
+                              className={`pill ${
+                                a.syncedCount >= scan.unifiedCount
+                                  ? "ok"
+                                  : "warn"
+                              }`}
+                            >
+                              {t("scan.synced", {
+                                n: a.syncedCount,
+                                total: scan.unifiedCount,
+                              })}
+                            </span>
+                          )}
+                        </>
                       ) : (
-                        <span className="pill ok">{t("scan.connected")}</span>
+                        <span className="pill ok" title={t("agent.directNote")}>
+                          {t("scan.connected")}
+                        </span>
                       )}
                     </div>
                   </div>
                   <div className="scan-path">
                     {a.root}
-                    {a.kind === "direct" ? t("scan.path.unified") : ""} ·{" "}
-                    {t("scan.skills", { n: a.skillCount })}
+                    {a.root === scan.unifiedRoot ? t("scan.path.unified") : ""}{" "}
+                    · {t("scan.skills", { n: a.skillCount })}
                   </div>
                 </div>
               ))}
 
-              <div className="scan-hint">{t("scan.hint")}</div>
             </div>
           </div>
         </div>
@@ -515,6 +752,266 @@ function App() {
                   </button>
                 </div>
               </div>
+
+              <div className="settings-section">
+                <div className="settings-label">{t("settings.agents")}</div>
+                <div className="settings-actions">
+                  <button
+                    className="btn sm"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setAgentFormOpen(true);
+                    }}
+                  >
+                    <IconPlus size={13} />
+                    {t("agent.add")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-label">{t("settings.about")}</div>
+                <div className="about-card">
+                  <div className="about-row">
+                    <div className="about-logo">
+                      <IconOrbit size={22} />
+                    </div>
+                    <div className="about-info">
+                      <div className="about-name">SkillNexus</div>
+                      <div className="about-meta">
+                        {t("about.version", { v: appVersion || "…" })}
+                      </div>
+                      <div className="about-meta">{t("about.author")}</div>
+                    </div>
+                  </div>
+                  <div className="about-actions">
+                    <button
+                      className="btn sm"
+                      onClick={() =>
+                        openUrl("https://github.com/Halface525/skill-nexus").catch(
+                          () => {},
+                        )
+                      }
+                    >
+                      {t("about.github")}
+                    </button>
+                    <button className="btn sm" onClick={handleCheckUpdate}>
+                      {t("about.checkUpdate")}
+                    </button>
+                  </div>
+                  {updateState === "checking" && (
+                    <div className="about-update">{t("about.checking")}</div>
+                  )}
+                  {updateState === "latest" && (
+                    <div className="about-update ok">✓ {t("about.latest")}</div>
+                  )}
+                  {updateState === "available" && (
+                    <div className="about-update warn">
+                      {t("about.updateAvailable", { v: latestVersion })}
+                      <button
+                        className="btn sm"
+                        onClick={() =>
+                          openUrl(
+                            "https://github.com/Halface525/skill-nexus/releases",
+                          ).catch(() => {})
+                        }
+                      >
+                        {t("about.download")}
+                      </button>
+                    </div>
+                  )}
+                  {updateState === "error" && (
+                    <div className="about-update err">
+                      {t("about.checkFailed")}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 卸载确认弹窗 */}
+      {uninstallTarget && (
+        <div className="overlay" onClick={() => setUninstallTarget(null)}>
+          <div
+            className="overlay-box confirm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="confirm-icon">
+              <IconAlert size={24} />
+            </div>
+            <div className="confirm-title">{t("uninstall.title")}</div>
+            <div className="confirm-text">
+              {t("uninstall.confirm", { name: uninstallTarget.name })}
+            </div>
+            <div className="confirm-actions">
+              <button className="btn" onClick={() => setUninstallTarget(null)}>
+                {t("uninstall.cancel")}
+              </button>
+              <button className="btn danger" onClick={handleUninstall}>
+                <IconTrash size={14} />
+                {t("uninstall.confirmBtn")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 添加自定义 Agent 表单 */}
+      {agentFormOpen && (
+        <div className="overlay" onClick={() => setAgentFormOpen(false)}>
+          <div
+            className="overlay-box form"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="overlay-header">
+              <span className="overlay-title">{t("agent.add")}</span>
+              <button
+                className="btn icon"
+                onClick={() => setAgentFormOpen(false)}
+                title={t("scan.close")}
+              >
+                <IconX size={16} />
+              </button>
+            </div>
+            <div className="form-body">
+              <div className="form-field">
+                <label>{t("agent.form.name")}</label>
+                <input
+                  value={agentForm.name}
+                  placeholder={t("agent.form.nameHint")}
+                  autoFocus
+                  onChange={(e) =>
+                    setAgentForm({ ...agentForm, name: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="form-field">
+                <label>{t("agent.form.kind")}</label>
+                <div className="seg">
+                  <button
+                    className={`seg-btn ${
+                      agentForm.kind === "direct" ? "active" : ""
+                    }`}
+                    onClick={() =>
+                      setAgentForm({ ...agentForm, kind: "direct" })
+                    }
+                  >
+                    {t("agent.form.kindDirect")}
+                  </button>
+                  <button
+                    className={`seg-btn ${
+                      agentForm.kind === "junction" ? "active" : ""
+                    }`}
+                    onClick={() =>
+                      setAgentForm({ ...agentForm, kind: "junction" })
+                    }
+                  >
+                    {t("agent.form.kindJunction")}
+                  </button>
+                </div>
+              </div>
+              {agentForm.kind === "junction" && (
+                <div className="form-field">
+                  <label>{t("agent.form.dir")}</label>
+                  <input
+                    value={agentForm.dir}
+                    placeholder={t("agent.form.dirHint")}
+                    onChange={(e) =>
+                      setAgentForm({ ...agentForm, dir: e.currentTarget.value })
+                    }
+                  />
+                </div>
+              )}
+              <div className="form-field">
+                <label>{t("agent.form.binary")}</label>
+                <input
+                  value={agentForm.binary}
+                  placeholder={t("agent.form.binaryHint")}
+                  onChange={(e) =>
+                    setAgentForm({
+                      ...agentForm,
+                      binary: e.currentTarget.value,
+                    })
+                  }
+                />
+              </div>
+              <div className="form-field">
+                <label>{t("agent.form.homeDir")}</label>
+                <input
+                  value={agentForm.homeDir}
+                  placeholder={t("agent.form.homeDirHint")}
+                  onChange={(e) =>
+                    setAgentForm({
+                      ...agentForm,
+                      homeDir: e.currentTarget.value,
+                    })
+                  }
+                />
+              </div>
+              <label className="form-check">
+                <input
+                  type="checkbox"
+                  checked={agentForm.manual}
+                  onChange={(e) =>
+                    setAgentForm({
+                      ...agentForm,
+                      manual: e.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>{t("agent.form.manual")}</span>
+              </label>
+              <div className="form-actions">
+                <button
+                  className="btn"
+                  onClick={() => setAgentFormOpen(false)}
+                >
+                  {t("agent.form.cancel")}
+                </button>
+                <button className="btn primary" onClick={handleAddAgent}>
+                  <IconPlus size={14} />
+                  {t("agent.form.save")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 首次运行:选择统一库位置 */}
+      {setupOpen && (
+        <div className="overlay">
+          <div className="overlay-box setup" onClick={(e) => e.stopPropagation()}>
+            <div className="setup-icon">
+              <IconOrbit size={26} />
+            </div>
+            <div className="setup-title">{t("setup.title")}</div>
+            <div className="setup-desc">{t("setup.desc")}</div>
+            <div className="setup-path">
+              <span className="setup-path-label">{t("setup.suggested")}</span>
+              <code>{suggestedLibrary || libraryPath}</code>
+            </div>
+            <div className="setup-actions">
+              <button
+                className="btn primary"
+                onClick={() =>
+                  handleSetupLibrary(suggestedLibrary || libraryPath)
+                }
+              >
+                {t("setup.useSuggested")}
+              </button>
+              <button className="btn" onClick={handleSetupChooseOther}>
+                {t("setup.chooseOther")}
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => handleSetupLibrary(libraryPath)}
+              >
+                {t("setup.keepDefault")}
+              </button>
             </div>
           </div>
         </div>

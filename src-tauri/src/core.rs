@@ -8,6 +8,7 @@
 //   junction → 有固定技能目录(如 ~/.claude/skills),需要建 junction 指向统一库
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,28 +21,134 @@ fn home() -> PathBuf {
     h.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
+// Windows 上把路径分隔符统一成反斜杠。配置里的 dir 常用正斜杠(如 ".claude/skills"),
+// 直接 home().join() 会产生混合分隔符(C:\...\.claude/skills),而 cmd/mklink 会把
+// / 当作命令开关导致建链接失败。
+fn norm_win(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(p.to_string_lossy().replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        p
+    }
+}
+
 pub fn unified_root() -> PathBuf {
     load_settings()
         .unified_library
-        .map(PathBuf::from)
+        .map(|s| norm_win(PathBuf::from(s)))
         .unwrap_or_else(default_unified_root)
 }
 
 pub fn get_settings() -> SettingsView {
+    let s = load_settings();
     SettingsView {
         unified_library: unified_root().to_string_lossy().to_string(),
         default_library: default_unified_root().to_string_lossy().to_string(),
+        library_setup: s.library_setup,
+        suggested_library: suggested_library_root().to_string_lossy().to_string(),
     }
 }
 
-pub fn set_unified_library(path: &str) -> Result<(), String> {
-    let p = Path::new(path);
-    fs::create_dir_all(p).map_err(|e| format!("无法创建目录: {e}"))?;
+// 建议的统一库位置:优先可写的程序目录(便携/绿色版),否则回退 APPDATA
+fn suggested_library_root() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let p = dir.join("skills");
+                let s = p.to_string_lossy().to_lowercase();
+                // Program Files 目录不可写,回退到 APPDATA
+                if !s.contains("program files") && !s.contains("programfiles") {
+                    return norm_win(p);
+                }
+            }
+        }
+        std::env::var_os("APPDATA")
+            .map(|a| norm_win(PathBuf::from(a).join("SkillNexus").join("skills")))
+            .unwrap_or_else(default_unified_root)
+    }
+    #[cfg(not(windows))]
+    {
+        default_unified_root()
+    }
+}
+
+fn write_settings(s: Settings) -> Result<(), String> {
     fs::create_dir_all(home().join(".agents")).map_err(|e| format!("无法创建配置目录: {e}"))?;
-    let s = Settings { unified_library: Some(path.to_string()) };
     let json = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
     fs::write(settings_path(), json).map_err(|e| format!("写入设置失败: {e}"))?;
     Ok(())
+}
+
+// 迁移统一库到新位置:复制技能 → 校验 → 源移走(.bak 保留)→ 更新设置。
+// 源离开活动路径后,direct 类也变成靠链接访问,才能做到逐个控制。
+pub fn migrate_library(target: &str) -> Result<(), String> {
+    let target_p = norm_win(PathBuf::from(target));
+    let source = unified_root();
+    if source == target_p {
+        // 相同位置:仅标记设置完成,不迁移
+        return write_settings(Settings {
+            unified_library: Some(target_p.to_string_lossy().to_string()),
+            library_setup: true,
+        });
+    }
+    fs::create_dir_all(&target_p).map_err(|e| format!("无法创建目录: {e}"))?;
+    let mut copied = 0usize;
+    if source.is_dir() {
+        if let Ok(entries) = fs::read_dir(&source) {
+            for e in entries.flatten() {
+                if e.path().is_dir() {
+                    let dst = target_p.join(e.file_name());
+                    if dst.exists() {
+                        // 清掉旧条目(可能是上次同步留下的过期链接),再复制
+                        if is_link(&dst) {
+                            let _ = remove_link(&dst);
+                        } else {
+                            let _ = fs::remove_dir_all(&dst);
+                        }
+                    }
+                    copy_dir_all(&e.path(), &dst)?;
+                    copied += 1;
+                }
+            }
+        }
+    }
+    // 校验:新位置技能数与源一致,不一致则不动
+    if copied > 0 {
+        let src_count = count_dirs(&source);
+        let dst_count = count_dirs(&target_p);
+        if dst_count != src_count {
+            return Err(format!(
+                "迁移校验失败:源 {src_count} 个,新位置 {dst_count} 个,未改动"
+            ));
+        }
+    }
+    // 源移走保留(.bak,带时间戳防覆盖),活动路径留空 → 控制生效
+    if copied > 0 && source.is_dir() {
+        let mut bak = source.with_extension("bak");
+        if bak.exists() {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            bak = PathBuf::from(format!("{}.{}.bak", source.to_string_lossy(), ts));
+        }
+        fs::rename(&source, &bak).map_err(|e| format!("源目录移走失败: {e}"))?;
+    }
+    // 确保约定路径存在,供 direct 组按开关建链接
+    let _ = fs::create_dir_all(&convention_root());
+    write_settings(Settings {
+        unified_library: Some(target_p.to_string_lossy().to_string()),
+        library_setup: true,
+    })
+}
+
+// 设置统一库位置(迁移式:复制技能 + 源移走)
+pub fn set_unified_library(path: &str) -> Result<(), String> {
+    migrate_library(path)
 }
 
 // ── 设置(settings.json)───────────────────────────────
@@ -49,6 +156,7 @@ pub fn set_unified_library(path: &str) -> Result<(), String> {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub unified_library: Option<String>,
+    pub library_setup: bool, // 是否已完成首次库位置设置
 }
 
 #[derive(Serialize)]
@@ -56,6 +164,8 @@ pub struct Settings {
 pub struct SettingsView {
     pub unified_library: String,
     pub default_library: String,
+    pub library_setup: bool,
+    pub suggested_library: String,
 }
 
 fn settings_path() -> PathBuf {
@@ -79,6 +189,36 @@ fn agents_config_path() -> PathBuf {
     home().join(".agents").join("agents.json")
 }
 
+// ── 每个技能排除的 agent(per-skill 管理)────────────
+// ~/.agents/skill_agents.json:
+//   { "excluded": { "nature-writing": ["WorkBuddy"] } }
+// 语义:技能默认同步给所有已启用的 junction 类 agent,排除列表里的不建链接
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct SkillAgents {
+    excluded: HashMap<String, Vec<String>>,
+}
+
+fn skill_agents_path() -> PathBuf {
+    home().join(".agents").join("skill_agents.json")
+}
+
+fn load_exclusions() -> HashMap<String, Vec<String>> {
+    if let Ok(raw) = fs::read_to_string(skill_agents_path()) {
+        if let Ok(s) = serde_json::from_str::<SkillAgents>(&raw) {
+            return s.excluded;
+        }
+    }
+    HashMap::new()
+}
+
+fn excluded_agents(skill: &str) -> Vec<String> {
+    load_exclusions()
+        .get(skill)
+        .cloned()
+        .unwrap_or_default()
+}
+
 // ── Agent 配置(可编辑)────────────────────────────────
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -93,18 +233,55 @@ pub struct AgentConfig {
     pub home_dir: Option<String>, // 检测用: home 下存在该目录即视为已安装,如 ".claude"
     #[serde(default)]
     pub appdata: Vec<String>, // 检测用: %APPDATA% 下存在这些目录即视为已安装,如 ["Trae CN"]
+    #[serde(default = "default_enabled")]
+    pub enabled: bool, // 使用开关(junction 类):false = 停止同步并移除链接
+    #[serde(default)]
+    pub manual: bool, // 手动标记已安装(自定义 agent 用,不自动检测)
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 impl AgentConfig {
+    // home 配置目录里是否有真实数据:
+    // 排除 SkillNexus 同步时自己创建的 skills 子目录,目录里还有别的内容才算真装了。
+    //   ~/.gemini   → 只有 skills(同步残留)→ 不算
+    //   ~/.workbuddy → db / 配置 / sessions 等真实数据 → 算
+    fn home_dir_real(&self) -> bool {
+        self.home_dir.as_deref().map(|h| {
+            let p = norm_win(home().join(h));
+            if !p.is_dir() {
+                return false;
+            }
+            fs::read_dir(&p)
+                .map(|it| it.flatten().any(|e| e.file_name() != "skills"))
+                .unwrap_or(false)
+        }).unwrap_or(false)
+    }
+
+    // %APPDATA% 下是否存在应用目录(GUI 应用安装时创建)
+    fn appdata_exists(&self) -> bool {
+        self.appdata.iter().any(|d| {
+            std::env::var_os("APPDATA")
+                .map(|a| PathBuf::from(a).join(d).exists())
+                .unwrap_or(false)
+        })
+    }
+
     // 该 agent 是否在本机检测到(决定是否显示在卡片、是否参与同步)
     fn detected(&self) -> bool {
-        self.binary.as_deref().map(on_path).unwrap_or(false)
-            || self.home_dir.as_deref().map(|h| home().join(h).exists()).unwrap_or(false)
-            || self.appdata.iter().any(|d| {
-                std::env::var_os("APPDATA")
-                    .map(|a| PathBuf::from(a).join(d).exists())
-                    .unwrap_or(false)
-            })
+        // 手动标记已安装 → 直接算
+        if self.manual {
+            return true;
+        }
+        // ① 命令在 PATH 上 → 强证据,必定已安装
+        if self.binary.as_deref().map(on_path).unwrap_or(false) {
+            return true;
+        }
+        // ② 否则看配置目录是否有真实数据 / AppData 是否有应用目录。
+        //    home 目录只有同步残留的 skills 时不算,避免 ~/.gemini 这类误判
+        self.home_dir_real() || self.appdata_exists()
     }
 }
 
@@ -117,31 +294,31 @@ struct Config {
 fn default_agents() -> Vec<AgentConfig> {
     vec![
         // ── 直接读取统一库(~/.agents/skills)的 agent ── 无需同步
-        AgentConfig { name: "DeepSeek Harness".into(), kind: "direct".into(), dir: None, binary: Some("dsh".into()), home_dir: Some(".dsh".into()), appdata: vec![] },
-        AgentConfig { name: "Codex".into(), kind: "direct".into(), dir: None, binary: Some("codex".into()), home_dir: Some(".codex".into()), appdata: vec![] },
-        AgentConfig { name: "Cursor".into(), kind: "direct".into(), dir: None, binary: Some("cursor".into()), home_dir: None, appdata: vec!["Cursor".into()] },
-        AgentConfig { name: "Antigravity".into(), kind: "direct".into(), dir: None, binary: Some("antigravity".into()), home_dir: None, appdata: vec!["Antigravity".into()] },
-        AgentConfig { name: "Aider".into(), kind: "direct".into(), dir: None, binary: Some("aider".into()), home_dir: Some(".aider".into()), appdata: vec![] },
-        AgentConfig { name: "Windsurf".into(), kind: "direct".into(), dir: None, binary: Some("windsurf".into()), home_dir: None, appdata: vec!["Windsurf".into()] },
-        AgentConfig { name: "Trae".into(), kind: "direct".into(), dir: None, binary: Some("trae".into()), home_dir: Some(".trae".into()), appdata: vec!["Trae CN".into(), "Trae".into()] },
-        AgentConfig { name: "GitHub Copilot".into(), kind: "direct".into(), dir: None, binary: Some("github-copilot".into()), home_dir: Some(".github".into()), appdata: vec!["Copilot".into()] },
-        AgentConfig { name: "Devin".into(), kind: "direct".into(), dir: None, binary: Some("devin".into()), home_dir: Some(".devin".into()), appdata: vec![] },
-        AgentConfig { name: "Amp".into(), kind: "direct".into(), dir: None, binary: Some("amp".into()), home_dir: Some(".config/agents".into()), appdata: vec![] },
+        AgentConfig { name: "DeepSeek Harness".into(), kind: "direct".into(), dir: None, binary: Some("dsh".into()), home_dir: Some(".dsh".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Codex".into(), kind: "direct".into(), dir: None, binary: Some("codex".into()), home_dir: Some(".codex".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Cursor".into(), kind: "direct".into(), dir: None, binary: Some("cursor".into()), home_dir: None, appdata: vec!["Cursor".into()], enabled: true, manual: false },
+        AgentConfig { name: "Antigravity".into(), kind: "direct".into(), dir: None, binary: Some("antigravity".into()), home_dir: None, appdata: vec!["Antigravity".into()], enabled: true, manual: false },
+        AgentConfig { name: "Aider".into(), kind: "direct".into(), dir: None, binary: Some("aider".into()), home_dir: Some(".aider".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Windsurf".into(), kind: "direct".into(), dir: None, binary: Some("windsurf".into()), home_dir: None, appdata: vec!["Windsurf".into()], enabled: true, manual: false },
+        AgentConfig { name: "Trae".into(), kind: "direct".into(), dir: None, binary: Some("trae".into()), home_dir: Some(".trae".into()), appdata: vec!["Trae CN".into(), "Trae".into()], enabled: true, manual: false },
+        AgentConfig { name: "GitHub Copilot".into(), kind: "direct".into(), dir: None, binary: Some("github-copilot".into()), home_dir: None, appdata: vec!["Copilot".into()], enabled: true, manual: false },
+        AgentConfig { name: "Devin".into(), kind: "direct".into(), dir: None, binary: Some("devin".into()), home_dir: Some(".devin".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Amp".into(), kind: "direct".into(), dir: None, binary: Some("amp".into()), home_dir: None, appdata: vec![], enabled: true, manual: false },
         // ── 固定技能目录、需要 junction 同步的 agent ──
-        AgentConfig { name: "Claude".into(), kind: "junction".into(), dir: Some(".claude/skills".into()), binary: Some("claude".into()), home_dir: Some(".claude".into()), appdata: vec![] },
-        AgentConfig { name: "Cline".into(), kind: "junction".into(), dir: Some(".cline/skills".into()), binary: None, home_dir: Some(".cline".into()), appdata: vec![] },
-        AgentConfig { name: "Roo Code".into(), kind: "junction".into(), dir: Some(".roo/skills".into()), binary: None, home_dir: Some(".roo".into()), appdata: vec![] },
-        AgentConfig { name: "Gemini".into(), kind: "junction".into(), dir: Some(".gemini/skills".into()), binary: Some("gemini".into()), home_dir: Some(".gemini".into()), appdata: vec![] },
-        AgentConfig { name: "OpenCode".into(), kind: "junction".into(), dir: Some(".config/opencode/skills".into()), binary: Some("opencode".into()), home_dir: None, appdata: vec![] },
-        AgentConfig { name: "Goose".into(), kind: "junction".into(), dir: Some(".config/goose/skills".into()), binary: Some("goose".into()), home_dir: Some(".config/goose".into()), appdata: vec![] },
-        AgentConfig { name: "Kiro".into(), kind: "junction".into(), dir: Some(".kiro/skills".into()), binary: Some("kiro".into()), home_dir: Some(".kiro".into()), appdata: vec![] },
-        AgentConfig { name: "WorkBuddy".into(), kind: "junction".into(), dir: Some(".workbuddy/skills".into()), binary: Some("wb".into()), home_dir: Some(".workbuddy".into()), appdata: vec![] },
-        AgentConfig { name: "Qwen Code".into(), kind: "junction".into(), dir: Some(".qwen/skills".into()), binary: Some("qwen-code".into()), home_dir: Some(".qwen".into()), appdata: vec![] },
-        AgentConfig { name: "Kilo Code".into(), kind: "junction".into(), dir: Some(".kilocode/skills".into()), binary: None, home_dir: Some(".kilocode".into()), appdata: vec![] },
-        AgentConfig { name: "OpenHands".into(), kind: "junction".into(), dir: Some(".openhands/skills".into()), binary: Some("openhands".into()), home_dir: Some(".openhands".into()), appdata: vec![] },
-        AgentConfig { name: "iFlow".into(), kind: "junction".into(), dir: Some(".iflow/skills".into()), binary: Some("iflow".into()), home_dir: Some(".iflow".into()), appdata: vec![] },
-        AgentConfig { name: "Kimi".into(), kind: "junction".into(), dir: Some(".kimi/skills".into()), binary: Some("kimi".into()), home_dir: Some(".kimi".into()), appdata: vec![] },
-        AgentConfig { name: "Grok".into(), kind: "junction".into(), dir: Some(".grok/skills".into()), binary: Some("grok".into()), home_dir: Some(".grok".into()), appdata: vec![] },
+        AgentConfig { name: "Claude".into(), kind: "junction".into(), dir: Some(".claude/skills".into()), binary: Some("claude".into()), home_dir: Some(".claude".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Cline".into(), kind: "junction".into(), dir: Some(".cline/skills".into()), binary: None, home_dir: Some(".cline".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Roo Code".into(), kind: "junction".into(), dir: Some(".roo/skills".into()), binary: None, home_dir: Some(".roo".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Gemini".into(), kind: "junction".into(), dir: Some(".gemini/skills".into()), binary: Some("gemini".into()), home_dir: Some(".gemini".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "OpenCode".into(), kind: "junction".into(), dir: Some(".config/opencode/skills".into()), binary: Some("opencode".into()), home_dir: None, appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Goose".into(), kind: "junction".into(), dir: Some(".config/goose/skills".into()), binary: Some("goose".into()), home_dir: Some(".config/goose".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Kiro".into(), kind: "junction".into(), dir: Some(".kiro/skills".into()), binary: Some("kiro".into()), home_dir: Some(".kiro".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "WorkBuddy".into(), kind: "junction".into(), dir: Some(".workbuddy/skills".into()), binary: Some("wb".into()), home_dir: Some(".workbuddy".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Qwen Code".into(), kind: "junction".into(), dir: Some(".qwen/skills".into()), binary: Some("qwen-code".into()), home_dir: Some(".qwen".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Kilo Code".into(), kind: "junction".into(), dir: Some(".kilocode/skills".into()), binary: None, home_dir: Some(".kilocode".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "OpenHands".into(), kind: "junction".into(), dir: Some(".openhands/skills".into()), binary: Some("openhands".into()), home_dir: Some(".openhands".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "iFlow".into(), kind: "junction".into(), dir: Some(".iflow/skills".into()), binary: Some("iflow".into()), home_dir: Some(".iflow".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Kimi".into(), kind: "junction".into(), dir: Some(".kimi/skills".into()), binary: Some("kimi".into()), home_dir: Some(".kimi".into()), appdata: vec![], enabled: true, manual: false },
+        AgentConfig { name: "Grok".into(), kind: "junction".into(), dir: Some(".grok/skills".into()), binary: Some("grok".into()), home_dir: Some(".grok".into()), appdata: vec![], enabled: true, manual: false },
     ]
 }
 
@@ -163,14 +340,26 @@ fn load_agents() -> Vec<AgentConfig> {
     default_agents()
 }
 
+// 约定的直接读取路径(agentskills 规范:各 agent 默认读这里)
+fn convention_root() -> PathBuf {
+    norm_win(home().join(".agents").join("skills"))
+}
+
+// 统一库是否就在约定路径上。
+// 是 → direct 类直接读库(无法逐个控制,只能一组);
+// 否 → direct 类也要靠约定路径里的链接访问(可逐个控制)
+fn library_is_at_convention() -> bool {
+    unified_root() == convention_root()
+}
+
 fn agent_skills_root(a: &AgentConfig) -> PathBuf {
     if a.kind == "junction" {
         a.dir
             .as_ref()
-            .map(|d| home().join(d))
-            .unwrap_or_else(|| home().join(format!(".{}/skills", a.name.to_lowercase())))
+            .map(|d| norm_win(home().join(d)))
+            .unwrap_or_else(|| norm_win(home().join(format!(".{}/skills", a.name.to_lowercase()))))
     } else {
-        unified_root() // direct 类直接读统一库
+        convention_root() // direct 类读约定的 ~/.agents/skills 路径
     }
 }
 
@@ -181,6 +370,7 @@ pub struct AgentStatus {
     pub name: String,
     pub kind: String, // "direct" 直接读取 | "junction" 链接
     pub ok: bool,
+    pub excluded: bool, // 该技能是否被此 agent 排除(per-skill 开关)
 }
 
 #[derive(Serialize, Clone)]
@@ -203,15 +393,19 @@ pub struct SyncResult {
 
 fn build_agent_statuses(skill_name: &str) -> Vec<AgentStatus> {
     let unified_exists = unified_root().is_dir();
+    let excluded = excluded_agents(skill_name);
+    let direct_free = library_is_at_convention(); // 库在约定路径 → direct 直接读
     load_agents()
         .iter()
-        .filter(|a| a.detected()) // 只显示本机已安装的 agent
+        .filter(|a| a.detected() && a.enabled) // 只显示本机已安装且启用的 agent
         .map(|a| {
-            let ok = match a.kind.as_str() {
-                "direct" => unified_exists, // 直接读统一库,库在即接入
-                _ => is_link(&agent_skills_root(a).join(skill_name)), // junction 是否已建
+            let is_ex = excluded.iter().any(|e| e == &a.name);
+            let ok = if a.kind == "direct" && direct_free {
+                unified_exists // 直接读统一库,库在即接入
+            } else {
+                !is_ex && is_link(&agent_skills_root(a).join(skill_name)) // 建链接判定
             };
-            AgentStatus { name: a.name.clone(), kind: a.kind.clone(), ok }
+            AgentStatus { name: a.name.clone(), kind: a.kind.clone(), ok, excluded: is_ex }
         })
         .collect()
 }
@@ -258,13 +452,30 @@ fn make_link(link: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// 为单个技能在所有 junction 类 agent 目录建链接
+// 移除单个链接(Windows junction / Unix symlink 都不跟随目标)
+fn remove_link(link: &Path) -> Result<(), String> {
+    if is_link(link) {
+        fs::remove_dir(link).map_err(|e| format!("移除链接失败: {e}"))?;
+    }
+    Ok(())
+}
+
+// 为单个技能在所有 agent 目录建链接(跳过被该技能排除的 agent)。
+// 库在约定路径时,direct 类直接读库无需链接;库在别处时,direct 也靠链接访问。
 fn link_all(name: &str, target: &Path) -> (usize, usize) {
     let mut ok = 0usize;
     let mut fail = 0usize;
+    let excluded = excluded_agents(name);
+    let direct_free = library_is_at_convention();
     for a in load_agents() {
-        if a.kind != "junction" || !a.detected() {
-            continue; // 只同步本机已安装的 junction 类 agent
+        if !a.detected() || !a.enabled {
+            continue;
+        }
+        if a.kind == "direct" && direct_free {
+            continue; // direct 直接读库,无需链接
+        }
+        if excluded.iter().any(|e| e == &a.name) {
+            continue; // 该技能被此 agent 排除
         }
         if make_link(&agent_skills_root(&a).join(name), target).is_ok() {
             ok += 1;
@@ -416,6 +627,152 @@ pub fn install_skill(src: &str, lang: &str) -> Result<String, String> {
     Ok(name)
 }
 
+pub fn uninstall_skill(name: &str, lang: &str) -> Result<(), String> {
+    // 名称校验同时保证无法路径穿越(只允许小写字母数字 + -)
+    if !is_valid_name(name) {
+        return Err(format!(
+            "{}: \"{name}\"",
+            tr(lang, "技能名格式不对", "Invalid skill name")
+        ));
+    }
+    let target = unified_root().join(name);
+    if !target.is_dir() {
+        return Err(format!(
+            "{}: \"{name}\"",
+            tr(lang, "技能不存在", "Skill not found")
+        ));
+    }
+    // 先尽力移除所有 junction 类 agent 目录里的链接,再删除统一库中的技能
+    for a in load_agents() {
+        if a.kind == "junction" {
+            let _ = remove_link(&agent_skills_root(&a).join(name));
+        }
+    }
+    fs::remove_dir_all(&target).map_err(|e| format!("{}: {e}", tr(lang, "删除技能失败", "Failed to delete skill")))?;
+    Ok(())
+}
+
+// 切换某个 agent 的使用开关。关掉 junction 类 agent 时,一并移除它目录里
+// 指向统一库的链接(可逆:重新打开 + 一键同步即可恢复)。
+pub fn set_agent_enabled(name: &str, enabled: bool, lang: &str) -> Result<(), String> {
+    let p = agents_config_path();
+    let mut agents = load_agents();
+    let mut found = false;
+    let unified_canon = fs::canonicalize(&unified_root()).unwrap_or_else(|_| unified_root());
+    for a in agents.iter_mut() {
+        if a.name != name {
+            continue;
+        }
+        if !enabled && a.kind == "junction" {
+            let root = agent_skills_root(a);
+            if let Ok(entries) = fs::read_dir(&root) {
+                for e in entries.flatten() {
+                    let path = e.path();
+                    // 只删指向统一库的链接,别的 junction 不动
+                    if let Ok(resolved) = fs::canonicalize(&path) {
+                        if resolved.starts_with(&unified_canon) {
+                            let _ = remove_link(&path);
+                        }
+                    }
+                }
+            }
+        }
+        a.enabled = enabled;
+        found = true;
+    }
+    if !found {
+        return Err(tr(lang, "未找到该 Agent", "Agent not found"));
+    }
+    let json = serde_json::to_string_pretty(&Config { agents }).map_err(|e| e.to_string())?;
+    fs::write(&p, json).map_err(|e| format!("{}: {e}", tr(lang, "写入配置失败", "Failed to write config")))?;
+    Ok(())
+}
+
+// 设置某个技能是否被某 agent 使用:enabled=true 启用并立即建链接;
+// false 排除该 agent 并立即移除该技能的链接。
+pub fn set_skill_agent(skill: &str, agent: &str, enabled: bool, lang: &str) -> Result<(), String> {
+    if !is_valid_name(skill) {
+        return Err(format!(
+            "{}: \"{skill}\"",
+            tr(lang, "技能名格式不对", "Invalid skill name")
+        ));
+    }
+    let mut ex = load_exclusions();
+    let list = ex.entry(skill.to_string()).or_default();
+    if enabled {
+        list.retain(|a| a != agent);
+        if list.is_empty() {
+            ex.remove(skill);
+        }
+        if let Some(a) = load_agents().iter().find(|a| a.name == agent) {
+            if a.kind == "junction" && a.detected() && a.enabled {
+                let target = unified_root().join(skill);
+                if target.is_dir() {
+                    let _ = make_link(&agent_skills_root(a).join(skill), &target);
+                }
+            }
+        }
+    } else {
+        if !list.iter().any(|a| a == agent) {
+            list.push(agent.to_string());
+        }
+        if let Some(a) = load_agents().iter().find(|a| a.name == agent) {
+            let _ = remove_link(&agent_skills_root(a).join(skill));
+        }
+    }
+    let json =
+        serde_json::to_string_pretty(&SkillAgents { excluded: ex }).map_err(|e| e.to_string())?;
+    fs::write(skill_agents_path(), json)
+        .map_err(|e| format!("{}: {e}", tr(lang, "写入配置失败", "Failed to write config")))?;
+    Ok(())
+}
+
+// ── 添加自定义 Agent ──────────────────────────────
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAgent {
+    pub name: String,
+    pub kind: String, // "direct" | "junction"
+    pub dir: Option<String>,
+    pub binary: Option<String>,
+    pub home_dir: Option<String>,
+    pub appdata: Vec<String>,
+    pub manual: bool,
+}
+
+pub fn add_agent(agent: NewAgent, lang: &str) -> Result<String, String> {
+    let name = agent.name.trim().to_string();
+    if name.is_empty() {
+        return Err(tr(lang, "Agent 名称不能为空", "Agent name cannot be empty"));
+    }
+    if agent.kind != "direct" && agent.kind != "junction" {
+        return Err(tr(lang, "类型只能是 direct 或 junction", "Kind must be direct or junction"));
+    }
+    if agent.kind == "junction"
+        && agent.dir.as_deref().map(|d| d.trim()).unwrap_or("").is_empty()
+    {
+        return Err(tr(lang, "junction 类需要填写技能目录", "Junction agents need a skill directory"));
+    }
+    let mut agents = load_agents();
+    if agents.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) {
+        return Err(format!("{}: \"{name}\"", tr(lang, "已存在同名 Agent", "An agent with this name already exists")));
+    }
+    let clean = |s: Option<String>| s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    agents.push(AgentConfig {
+        name: name.clone(),
+        kind: agent.kind.clone(),
+        dir: clean(agent.dir),
+        binary: clean(agent.binary),
+        home_dir: clean(agent.home_dir),
+        appdata: agent.appdata.iter().map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect(),
+        enabled: true,
+        manual: agent.manual,
+    });
+    let json = serde_json::to_string_pretty(&Config { agents }).map_err(|e| e.to_string())?;
+    fs::write(agents_config_path(), json).map_err(|e| format!("{}: {e}", tr(lang, "写入配置失败", "Failed to write config")))?;
+    Ok(name)
+}
+
 pub fn sync_all() -> Result<SyncResult, String> {
     let root = unified_root();
     let mut ok = 0usize;
@@ -467,6 +824,7 @@ pub struct AgentScan {
     pub name: String,
     pub installed: bool,
     pub kind: String, // "direct" 直接读取 | "junction" 链接
+    pub enabled: bool, // 使用开关(junction 类)
     pub root: String,
     pub skill_count: usize,
     pub synced_count: usize, // 已同步(已建链接)的技能数
@@ -496,20 +854,22 @@ fn count_synced(agent_root: &Path, unified: &Path) -> usize {
 pub fn scan_info() -> ScanInfo {
     let unified = unified_root();
     let unified_count = count_dirs(&unified);
+    let direct_free = library_is_at_convention();
     let mut agents = Vec::new();
     for a in load_agents() {
         if !a.detected() {
             continue; // 只报告本机已安装的 agent
         }
         let root = agent_skills_root(&a);
-        let synced_count = if a.kind == "junction" {
-            count_synced(&root, &unified)
+        let synced_count = if a.kind == "direct" && direct_free {
+            unified_count // 库在约定路径,direct 直接读全部
         } else {
-            unified_count // 直接读统一库,库在即全部接入
+            count_synced(&root, &unified)
         };
         agents.push(AgentScan {
             name: a.name,
             installed: true,
+            enabled: a.enabled,
             kind: a.kind,
             root: root.to_string_lossy().to_string(),
             skill_count: count_dirs(&root),
@@ -538,3 +898,8 @@ pub fn open_dir(path: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+
+
+
+
