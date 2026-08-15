@@ -82,6 +82,8 @@ jobs:
           args: ${{ matrix.args }}
 
       # 额外上传 Windows 绿色免安装版(exe 本体,不依赖安装器)
+      # 注意:Release 已存在时 create-release 会幂等跳过、不设 release_id 输出,
+      # 所以这里改为运行时按 tag 解析 release id,并用 -f 让上传失败真正失败。
       - name: Upload portable Windows exe
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -93,8 +95,12 @@ jobs:
             [ -f "$p" ] && ASSET="$p" && break
           done
           if [ -z "$ASSET" ]; then echo "portable exe not found"; exit 1; fi
-          curl -sL -H "Authorization: token $GITHUB_TOKEN" \
+          RELEASE_ID=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
+            | grep -o '"id": *[0-9]*' | head -1 | grep -o '[0-9]*')
+          if [ -z "$RELEASE_ID" ]; then echo "cannot resolve release id for ${{ github.ref_name }}"; exit 1; fi
+          curl -sfL -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/octet-stream" \
             --data-binary "@$ASSET" \
-            "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}/assets?name=SkillNexus.exe"
-          echo "uploaded $ASSET as SkillNexus.exe"
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=SkillNexus.exe"
+          echo "uploaded $ASSET as SkillNexus.exe to release $RELEASE_ID"
