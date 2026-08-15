@@ -80,3 +80,21 @@ jobs:
           releaseName: ${{ github.ref_name }}
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
+
+      # 额外上传 Windows 绿色免安装版(exe 本体,不依赖安装器)
+      - name: Upload portable Windows exe
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSET=""
+          for p in "src-tauri/target/x86_64-pc-windows-msvc/release/SkillNexus.exe" "src-tauri/target/release/SkillNexus.exe"; do
+            [ -f "$p" ] && ASSET="$p" && break
+          done
+          if [ -z "$ASSET" ]; then echo "portable exe not found"; exit 1; fi
+          curl -sL -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@$ASSET" \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}/assets?name=SkillNexus.exe"
+          echo "uploaded $ASSET as SkillNexus.exe"
