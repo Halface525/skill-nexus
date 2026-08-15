@@ -24,7 +24,7 @@
 
 | 文件 | 链接 |
 |------|------|
-| 📦 Windows 安装程序 | [SkillNexus_0.2.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.2.0_x64-setup.exe) |
+| 📦 Windows 安装程序 | [SkillNexus_0.3.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.3.0_x64-setup.exe) |
 | 🟢 Windows 免安装版 | [SkillNexus.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus.exe) |
 
 其他平台或更多版本:前往 [Releases](https://github.com/Halface525/skill-nexus/releases/latest)。

@@ -24,7 +24,7 @@ A cross-platform desktop tool that manages the skill libraries of AI coding agen
 
 | File | Link |
 |------|------|
-| 📦 Windows installer | [SkillNexus_0.2.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.2.0_x64-setup.exe) |
+| 📦 Windows installer | [SkillNexus_0.3.0_x64-setup.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus_0.3.0_x64-setup.exe) |
 | 🟢 Windows portable | [SkillNexus.exe](https://github.com/Halface525/skill-nexus/releases/latest/download/SkillNexus.exe) |
 
 Other platforms or older versions: see [Releases](https://github.com/Halface525/skill-nexus/releases/latest).

@@ -126,7 +126,9 @@ pub fn migrate_library(target: &str) -> Result<(), String> {
             ));
         }
     }
-    // 源移走保留(.bak,带时间戳防覆盖),活动路径留空 → 控制生效
+    // 源移走保留(.bak,带时间戳防覆盖),活动路径留空 → 控制生效。
+    // 注意:不能整体 rename 整个目录 —— 父目录被正在使用的 Agent 占用时会「拒绝访问」,
+    // 改为逐个子目录移走(子目录通常可移动),再删空的源目录。
     if copied > 0 && source.is_dir() {
         let mut bak = source.with_extension("bak");
         if bak.exists() {
@@ -136,7 +138,32 @@ pub fn migrate_library(target: &str) -> Result<(), String> {
                 .unwrap_or(0);
             bak = PathBuf::from(format!("{}.{}.bak", source.to_string_lossy(), ts));
         }
-        fs::rename(&source, &bak).map_err(|e| format!("源目录移走失败: {e}"))?;
+        fs::create_dir_all(&bak).map_err(|e| format!("创建备份目录失败: {e}"))?;
+        let mut moved: Vec<std::ffi::OsString> = Vec::new();
+        if let Ok(entries) = fs::read_dir(&source) {
+            for e in entries.flatten() {
+                if e.path().is_dir() {
+                    let dst = bak.join(e.file_name());
+                    if fs::rename(&e.path(), &dst).is_ok() {
+                        moved.push(e.file_name());
+                    }
+                }
+            }
+        }
+        // 有技能没移走(被占用)→ 回滚已移走的,保持源完整,让用户关掉占用后再重试
+        if moved.len() < copied {
+            for name in moved {
+                let _ = fs::rename(&bak.join(&name), &source.join(&name));
+            }
+            let _ = fs::remove_dir(&bak);
+            return Err(
+                "旧技能目录被正在使用的 Agent 占用(如 WorkBuddy / Claude Code),未能移动。\
+                 请关闭这些 Agent 后重试迁移。"
+                    .to_string(),
+            );
+        }
+        // 全部移走,删除空的源目录(若删不掉留空目录,不影响控制)
+        let _ = fs::remove_dir(&source);
     }
     // 确保约定路径存在,供 direct 组按开关建链接
     let _ = fs::create_dir_all(&convention_root());
