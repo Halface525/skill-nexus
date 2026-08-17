@@ -84,6 +84,57 @@ body {
   padding: 14px 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 自绘标题栏:可拖拽 + 窗口控制 */
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 8px 0 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  -webkit-user-select: none;
+  user-select: none;
+  flex-shrink: 0;
+}
+.titlebar-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.wc-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.wc-btn:hover {
+  background: var(--card-hover);
+  color: var(--text);
+}
+.wc-btn.wc-close:hover {
+  background: #e81123;
+  color: #fff;
 }
 
 .brand {

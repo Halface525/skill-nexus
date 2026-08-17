@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
@@ -18,6 +19,8 @@ import {
   IconSettings,
   IconTrash,
   IconAlert,
+  IconMinimize,
+  IconMaximize,
 } from "./icons";
 import "./App.css";
 
@@ -153,6 +156,7 @@ function App() {
   });
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const win = getCurrentWindow();
 
   const t = makeT(lang);
   const eff = effectiveTheme(theme);
@@ -160,10 +164,17 @@ function App() {
     ? `${t("status.loadFailed")}: ${loadError}`
     : t("status.count", { n: skills.length, path: libraryPath || "~/.agents/skills" });
 
-  // 主题:应用 + 持久化 + 系统主题变化监听
+  // 主题:应用 + 持久化 + 系统主题变化监听 + 原生标题栏跟随
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", eff);
     localStorage.setItem("theme", theme);
+    // 让 Windows 原生标题栏(最小化/最大化/关闭那一条)跟随应用主题
+    // "system" → null(跟随系统)
+    const win = getCurrentWindow();
+    (theme === "system"
+      ? win.setTheme(null)
+      : win.setTheme(theme as "light" | "dark")
+    ).catch(() => {});
   }, [eff, theme]);
   useEffect(() => {
     if (theme !== "system") return;
@@ -434,7 +445,42 @@ function App() {
 
   return (
     <div className="app">
-      {/* 顶栏 */}
+      {/* 自绘标题栏:可拖拽,双击最大化/还原,右侧窗口控制 */}
+      <div
+        className="titlebar"
+        data-tauri-drag-region
+        onDoubleClick={() => win.toggleMaximize()}
+      >
+        <div className="titlebar-title" data-tauri-drag-region>
+          <IconOrbit size={15} />
+          <span>{t("app.title")}</span>
+        </div>
+        <div className="window-controls" onDoubleClick={(e) => e.stopPropagation()}>
+          <button
+            className="wc-btn"
+            title={t("win.minimize")}
+            onClick={() => win.minimize()}
+          >
+            <IconMinimize size={14} />
+          </button>
+          <button
+            className="wc-btn"
+            title={t("win.maximize")}
+            onClick={() => win.toggleMaximize()}
+          >
+            <IconMaximize size={13} />
+          </button>
+          <button
+            className="wc-btn wc-close"
+            title={t("win.close")}
+            onClick={() => win.close()}
+          >
+            <IconX size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* 顶栏:品牌 + 操作 */}
       <header className="header">
         <div className="brand">
           <div className="logo">

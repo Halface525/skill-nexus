@@ -118,6 +118,23 @@ export function IconX({ size = 16 }: IconProps) {
   );
 }
 
+// 窗口控制:最小化 / 最大化(含还原)
+export function IconMinimize({ size = 14 }: IconProps) {
+  return (
+    <Svg size={size}>
+      <path d="M5 12h14" />
+    </Svg>
+  );
+}
+
+export function IconMaximize({ size = 13 }: IconProps) {
+  return (
+    <Svg size={size}>
+      <rect x="5" y="5" width="14" height="14" rx="1" />
+    </Svg>
+  );
+}
+
 export function IconTrash({ size = 16 }: IconProps) {
   return (
     <Svg size={size}>
